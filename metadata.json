@@ -1,0 +1,7 @@
+{
+  "name": "Micro:bit Dashboard",
+  "description": "A dashboard to view, log, visualize, and interact with BBC micro:bit sensor data via Web Bluetooth.",
+  "requestFramePermissions": [
+    "bluetooth"
+  ]
+}
