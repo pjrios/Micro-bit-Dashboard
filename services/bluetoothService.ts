@@ -108,8 +108,16 @@ export class BluetoothService {
     const serviceUUID = config.serviceUUID.toLowerCase();
 
     try {
+      const filters: BluetoothRequestDeviceFilter[] = [];
+      if (config.mode === 'UART') {
+        // Some micro:bit firmwares do not advertise the UART service UUID.
+        // Allow namePrefix matching so the device appears in the chooser.
+        filters.push({ namePrefix: 'micro:bit' });
+      }
+      filters.push({ services: [serviceUUID] });
+
       this.device = await navigator.bluetooth.requestDevice({
-        filters: [{ services: [serviceUUID] }],
+        filters,
         optionalServices: [serviceUUID]
       });
 
