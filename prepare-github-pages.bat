@@ -35,14 +35,16 @@ REM SPA fallback (safe even without routing).
 copy /y docs\index.html docs\404.html >nul
 
 echo.
+echo Starting Vite dev server in a new window...
+start "Vite Dev Server" cmd /k "npm run dev"
+
+echo.
 echo Done. Commit and push the /docs folder, then enable GitHub Pages:
 echo Settings ^> Pages ^> Deploy from a branch ^> main ^> /docs
 echo.
 pause
-exit /b 0
 
 :fail
 echo.
 echo Build failed.
 pause
-exit /b 1

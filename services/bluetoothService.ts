@@ -108,18 +108,19 @@ export class BluetoothService {
     const serviceUUID = config.serviceUUID.toLowerCase();
 
     try {
-      const filters: BluetoothRequestDeviceFilter[] = [];
       if (config.mode === 'UART') {
-        // Some micro:bit firmwares do not advertise the UART service UUID.
-        // Allow namePrefix matching so the device appears in the chooser.
-        filters.push({ namePrefix: 'micro:bit' });
+        // Many micro:bit firmwares do not advertise the UART service UUID,
+        // so use acceptAllDevices to ensure it appears in the chooser.
+        this.device = await navigator.bluetooth.requestDevice({
+          acceptAllDevices: true,
+          optionalServices: [serviceUUID]
+        });
+      } else {
+        this.device = await navigator.bluetooth.requestDevice({
+          filters: [{ services: [serviceUUID] }],
+          optionalServices: [serviceUUID]
+        });
       }
-      filters.push({ services: [serviceUUID] });
-
-      this.device = await navigator.bluetooth.requestDevice({
-        filters,
-        optionalServices: [serviceUUID]
-      });
 
       if (!this.device) throw new Error('No device selected');
       
@@ -128,18 +129,45 @@ export class BluetoothService {
       this.server = await this.device.gatt?.connect() || null;
       if (!this.server) throw new Error('Could not connect to GATT Server');
 
-      const service = await this.server.getPrimaryService(serviceUUID);
-      
-      // TX = Notify (Microbit sends to us)
-      const txChar = await service.getCharacteristic(config.txUUID);
+      let service: BluetoothRemoteGATTService | null = null;
+      try {
+        service = await this.server.getPrimaryService(serviceUUID);
+      } catch (e: any) {
+        if (e?.name === 'NotSupportedError' || e?.name === 'NotFoundError') {
+          const services = await this.server.getPrimaryServices();
+          service = services.find(s => s.uuid.toLowerCase() === serviceUUID) || null;
+        } else {
+          throw e;
+        }
+      }
+      if (!service) {
+        throw new Error(
+          'UART service not found. Ensure your micro:bit code calls bluetooth.startUartService() and sends data with bluetooth.uartWriteLine().'
+        );
+      }
+
+      const characteristics = await service.getCharacteristics();
+      const txUuid = config.txUUID.toLowerCase();
+      const rxUuid = config.rxUUID.toLowerCase();
+      const txChar = characteristics.find(c => c.uuid.toLowerCase() === txUuid) ||
+        characteristics.find(c => c.properties.notify || c.properties.indicate);
+      const rxChar = characteristics.find(c => c.uuid.toLowerCase() === rxUuid) ||
+        characteristics.find(c => c.properties.write || c.properties.writeWithoutResponse);
+
+      if (!txChar) {
+        throw new Error('UART TX characteristic (notify) not found.');
+      }
+      if (!rxChar) {
+        throw new Error('UART RX characteristic (write) not found.');
+      }
+
       await txChar.startNotifications();
       txChar.addEventListener('characteristicvaluechanged', (e: any) => {
         const value = new TextDecoder().decode(e.target.value);
         handleData(value);
       });
 
-      // RX = Write (We send to Microbit)
-      this.rxCharacteristic = await service.getCharacteristic(config.rxUUID);
+      this.rxCharacteristic = rxChar;
 
     } catch (error: any) {
       if (error.name === 'NotFoundError' || error.message.toLowerCase().includes('cancel')) {
@@ -178,6 +206,30 @@ export class BluetoothService {
 
   isConnected(): boolean {
     return !!(this.device && this.device.gatt?.connected);
+  }
+
+  async diagnoseServices(): Promise<{ services: string[]; uartCharacteristics: string[] | null; }> {
+    if (!navigator.bluetooth) {
+      throw new Error('Web Bluetooth is not supported in this browser.');
+    }
+    const device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: [
+        '6e400001-b5a3-f393-e0a9-e50e24dcca9e'
+      ]
+    });
+    const server = await device.gatt?.connect();
+    if (!server) throw new Error('Could not connect to GATT Server');
+    const services = await server.getPrimaryServices();
+    const uuids = services.map(s => s.uuid);
+    let uartCharacteristics: string[] | null = null;
+    const uartService = services.find(s => s.uuid.toLowerCase() === '6e400001-b5a3-f393-e0a9-e50e24dcca9e');
+    if (uartService) {
+      const chars = await uartService.getCharacteristics();
+      uartCharacteristics = chars.map(c => c.uuid);
+    }
+    server.disconnect();
+    return { services: uuids, uartCharacteristics };
   }
 }
 

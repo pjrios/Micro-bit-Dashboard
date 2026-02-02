@@ -24,6 +24,9 @@ const App: React.FC = () => {
   const [latest, setLatest] = useState<DataPoint | null>(null);
   const [availableKeys, setAvailableKeys] = useState<string[]>([]);
   const [parseErrors, setParseErrors] = useState(0);
+  const [diagnosticServices, setDiagnosticServices] = useState<string[] | null>(null);
+  const [diagnosticUartChars, setDiagnosticUartChars] = useState<string[] | null>(null);
+  const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
   
   // Buffering
   const bufferRef = useRef<string>('');
@@ -255,6 +258,19 @@ const App: React.FC = () => {
     }
   };
 
+  const runDiagnostics = async () => {
+    setDiagnosticError(null);
+    setDiagnosticServices(null);
+    setDiagnosticUartChars(null);
+    try {
+      const result = await btService.diagnoseServices();
+      setDiagnosticServices(result.services);
+      setDiagnosticUartChars(result.uartCharacteristics);
+    } catch (e: any) {
+      setDiagnosticError(e.message || 'Diagnostics failed');
+    }
+  };
+
   // --- Effects ---
   useEffect(() => {
     // Load sounds
@@ -373,9 +389,14 @@ const App: React.FC = () => {
             )}
 
             {status === 'DISCONNECTED' ? (
-                <Button onClick={handleConnect} className="flex items-center gap-2">
+                <div className="flex items-center gap-2">
+                  <Button onClick={handleConnect} className="flex items-center gap-2">
                     <Bluetooth size={18} /> Connect
-                </Button>
+                  </Button>
+                  <Button variant="secondary" onClick={runDiagnostics} className="flex items-center gap-2 text-sm">
+                    Diagnostics
+                  </Button>
+                </div>
             ) : status === 'CONNECTING' ? (
                 <Button disabled className="flex items-center gap-2">
                     <Bluetooth size={18} className="animate-spin" /> Connecting...
@@ -419,6 +440,17 @@ const App: React.FC = () => {
                 )}
             </Card>
             {errorMessage && <div className="mt-2 text-red-400 text-xs">{errorMessage}</div>}
+            {diagnosticError && <div className="mt-2 text-red-400 text-xs">{diagnosticError}</div>}
+            {diagnosticServices && (
+                <div className="mt-2 text-gray-400 text-[11px] break-all">
+                  Services: {diagnosticServices.join(', ')}
+                </div>
+            )}
+            {diagnosticUartChars && (
+                <div className="mt-2 text-gray-400 text-[11px] break-all">
+                  UART Chars: {diagnosticUartChars.join(', ')}
+                </div>
+            )}
           </section>
 
           {/* Rules Engine */}
