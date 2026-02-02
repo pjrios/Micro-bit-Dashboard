@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar, ScatterChart, Scatter, Cell } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 import { Activity, Bluetooth, Download, Play, Save, Settings, Terminal, Trash2, Volume2, Plus, Upload, WifiOff, Send } from 'lucide-react';
 
 import { btService } from './services/bluetoothService';
@@ -10,7 +10,6 @@ import { UART_CONFIG, BluetoothConfig, DataPoint, Rule, SoundAsset, RuleOperator
 // Constants
 const MAX_HISTORY = 10000;
 const CHART_HISTORY_LIMIT = 50; // Points to show on chart
-const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
 const App: React.FC = () => {
   // --- State ---
@@ -33,13 +32,14 @@ const App: React.FC = () => {
   
   // Visualizations
   const [selectedChartField, setSelectedChartField] = useState<string>('');
-  const [chartType, setChartType] = useState<'line' | 'bar' | 'scatter'>('line');
+  const [chartType, setChartType] = useState<'line' | 'bar'>('line');
   const [chartWindow, setChartWindow] = useState<number>(30); // seconds
 
   // Rules & Audio
   const [sounds, setSounds] = useState<SoundAsset[]>([]);
   const [rules, setRules] = useState<Rule[]>([]);
   const [audioEnabled, setAudioEnabled] = useState(false);
+  const [eventLog, setEventLog] = useState<{ ts: number; level: 'info' | 'warn' | 'error'; message: string }[]>([]);
   
   // Logging
   const [isRecording, setIsRecording] = useState(false);
@@ -85,6 +85,13 @@ const App: React.FC = () => {
       console.error("Audio playback error", e);
     }
   };
+
+  const pushEvent = useCallback((level: 'info' | 'warn' | 'error', message: string) => {
+    setEventLog(prev => {
+      const next = [{ ts: Date.now(), level, message }, ...prev];
+      return next.slice(0, 100);
+    });
+  }, []);
 
   // --- Bluetooth Logic ---
   
@@ -194,6 +201,7 @@ const App: React.FC = () => {
 
       if (triggered) {
         playSound(rule.soundId);
+        pushEvent('info', `Rule "${rule.name}" triggered: ${rule.field} ${rule.operator} ${rule.threshold1}`);
         return { ...rule, lastTriggered: now };
       }
       return rule;
@@ -231,6 +239,7 @@ const App: React.FC = () => {
       setStatus('CONNECTED');
       btService.setDisconnectCallback(() => setStatus('DISCONNECTED'));
       initAudio(); // Try to init audio on user gesture
+      pushEvent('info', 'Connected to micro:bit.');
     } catch (e: any) {
       setStatus('DISCONNECTED');
       // If the user cancelled, we don't necessarily need a loud error message, 
@@ -240,12 +249,14 @@ const App: React.FC = () => {
       } else {
         setErrorMessage(e.message || 'Connection failed');
       }
+      pushEvent('error', e.message || 'Connection failed');
     }
   };
 
   const handleDisconnect = () => {
     btService.disconnect();
     setStatus('DISCONNECTED');
+    pushEvent('warn', 'Disconnected.');
   };
 
   const sendCommand = async () => {
@@ -410,10 +421,10 @@ const App: React.FC = () => {
       </header>
 
       {/* Main Content */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden flex-col lg:flex-row">
         
         {/* Left Sidebar (Config & Rules) */}
-        <aside className="w-80 bg-dark-900 border-r border-gray-800 overflow-y-auto p-4 flex flex-col gap-6 shrink-0">
+        <aside className="w-full lg:w-80 bg-dark-900 border-r border-gray-800 overflow-y-auto p-4 flex flex-col gap-6 shrink-0">
           
           {/* Connection Config */}
           <section>
@@ -553,11 +564,11 @@ const App: React.FC = () => {
             </div>
 
             {/* Visualization Panel */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6 h-[400px]">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6 lg:min-h-[420px]">
                 {/* Main Chart */}
-                <Card className="lg:col-span-2 flex flex-col h-full" title="Real-time Analysis">
-                    <div className="flex justify-between items-center mb-4 px-2">
-                         <div className="flex gap-2 text-xs">
+                <Card className="lg:col-span-2 flex flex-col min-h-[360px]" title="Real-time Analysis" bodyClassName="flex flex-col h-full p-5">
+                    <div className="flex flex-wrap justify-between items-center mb-4 px-2 gap-3">
+                         <div className="flex flex-wrap gap-2 text-xs">
                              <span className="text-gray-400 flex items-center">Window:</span>
                              {[10, 30, 60, 120].map(w => (
                                  <button key={w} onClick={() => setChartWindow(w)} className={`px-2 py-0.5 rounded ${chartWindow === w ? 'bg-brand-600 text-white' : 'bg-gray-700'}`}>
@@ -571,10 +582,11 @@ const App: React.FC = () => {
                          </div>
                     </div>
                     
-                    <div className="flex-1 w-full min-h-0">
-                        <ResponsiveContainer width="100%" height="100%">
+                    <div className="flex-1 w-full min-h-[280px]">
+                        {selectedChartField && displayChartData.length > 0 ? (
+                          <ResponsiveContainer width="100%" height="100%">
                             {chartType === 'line' ? (
-                                <LineChart data={displayChartData}>
+                                <LineChart data={displayChartData} margin={{ top: 10, right: 20, bottom: 24, left: 0 }}>
                                     <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
                                     <XAxis 
                                         dataKey="timestamp" 
@@ -582,13 +594,14 @@ const App: React.FC = () => {
                                         tickFormatter={(unix) => new Date(unix).toLocaleTimeString()} 
                                         stroke="#9ca3af"
                                         tick={{fontSize: 12}}
+                                        tickMargin={8}
                                     />
-                                    <YAxis stroke="#9ca3af" tick={{fontSize: 12}} />
+                                    <YAxis stroke="#9ca3af" tick={{fontSize: 12}} tickMargin={8} />
                                     <RechartsTooltip 
                                         contentStyle={{backgroundColor: '#1f2937', borderColor: '#374151', color: '#fff'}}
                                         labelFormatter={(unix) => new Date(unix).toLocaleTimeString()}
                                     />
-                                    <Line 
+                                    <Line
                                         type="monotone" 
                                         dataKey={selectedChartField} 
                                         stroke="#22c55e" 
@@ -598,25 +611,30 @@ const App: React.FC = () => {
                                     />
                                 </LineChart>
                             ) : (
-                                <BarChart data={displayChartData}>
+                                <BarChart data={displayChartData} margin={{ top: 10, right: 20, bottom: 24, left: 0 }}>
                                     <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                                    <XAxis dataKey="timestamp" tick={false} stroke="#9ca3af"/>
-                                    <YAxis stroke="#9ca3af" />
+                                    <XAxis dataKey="timestamp" tick={false} stroke="#9ca3af" tickMargin={8}/>
+                                    <YAxis stroke="#9ca3af" tick={{fontSize: 12}} tickMargin={8} />
                                     <RechartsTooltip contentStyle={{backgroundColor: '#1f2937', borderColor: '#374151', color: '#fff'}}/>
                                     <Bar dataKey={selectedChartField} fill="#22c55e" />
                                 </BarChart>
                             )}
-                        </ResponsiveContainer>
+                          </ResponsiveContainer>
+                        ) : (
+                          <div className="h-full w-full flex items-center justify-center text-gray-500 text-sm border border-dashed border-gray-700 rounded-md">
+                            {availableKeys.length === 0 ? 'Connect device to see live data.' : 'Select a field to chart.'}
+                          </div>
+                        )}
                     </div>
                 </Card>
 
                 {/* Secondary Gauge / Stats */}
                 <div className="flex flex-col gap-6 h-full">
                     {/* Gauge (Simple SVG implementation) */}
-                    <Card className="flex-1 flex flex-col items-center justify-center relative" title="Current Value">
+                    <Card className="flex-1 min-h-[220px]" title="Current Value" bodyClassName="flex flex-col items-center justify-center gap-2">
                         {selectedChartField ? (
                             <>
-                                <svg viewBox="0 0 100 50" className="w-full h-full max-h-40">
+                                <svg viewBox="0 0 100 50" className="w-full max-w-[260px] h-32">
                                     <path d="M10,50 A40,40 0 0,1 90,50" fill="none" stroke="#374151" strokeWidth="10" strokeLinecap="round"/>
                                     {latest && (
                                         <path 
@@ -631,31 +649,30 @@ const App: React.FC = () => {
                                         />
                                     )}
                                 </svg>
-                                <div className="absolute bottom-4 text-3xl font-bold text-white">
+                                <div className="text-3xl font-bold text-white">
                                     {latest?.[selectedChartField]?.toFixed(1) ?? 0}
                                 </div>
-                                <div className="text-gray-500 text-xs mt-[-1rem]">Assuming 0-100 scale for gauge</div>
+                                <div className="text-gray-500 text-xs">Assuming 0-100 scale for gauge</div>
                             </>
                         ) : <div className="text-gray-500">Select a field</div>}
                     </Card>
 
-                    {/* Scatter Plot Option */}
-                    <Card className="flex-1" title="Scatter (X vs Y)">
-                        <div className="h-full w-full min-h-[150px]">
-                           {availableKeys.length >= 2 ? (
-                               <ResponsiveContainer>
-                                   <ScatterChart margin={{top: 10, right: 10, bottom: 10, left: 0}}>
-                                       <XAxis type="number" dataKey={availableKeys[0]} name={availableKeys[0]} stroke="#6b7280" tick={{fontSize: 10}} />
-                                       <YAxis type="number" dataKey={availableKeys[1]} name={availableKeys[1]} stroke="#6b7280" tick={{fontSize: 10}} />
-                                       <RechartsTooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={{backgroundColor: '#1f2937', borderColor: '#374151'}} />
-                                       <Scatter name="Values" data={displayChartData} fill="#8884d8">
-                                            {displayChartData.map((entry, index) => (
-                                                <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                                            ))}
-                                       </Scatter>
-                                   </ScatterChart>
-                               </ResponsiveContainer>
-                           ) : <div className="flex items-center justify-center h-full text-gray-500 text-xs">Need 2+ fields</div>}
+                    {/* Event Log */}
+                    <Card className="flex-1 min-h-[200px]" title="Event Log" bodyClassName="h-full p-4">
+                        <div className="h-full w-full max-h-[220px] overflow-y-auto space-y-2 text-xs">
+                          {eventLog.length === 0 ? (
+                            <div className="text-gray-500">No events yet.</div>
+                          ) : (
+                            eventLog.map((evt, idx) => (
+                              <div key={`${evt.ts}-${idx}`} className="flex items-start gap-2">
+                                <span className={`mt-0.5 h-2 w-2 rounded-full ${evt.level === 'error' ? 'bg-red-500' : evt.level === 'warn' ? 'bg-yellow-500' : 'bg-green-500'}`} />
+                                <div className="text-gray-300">
+                                  <span className="text-gray-500 mr-2">{new Date(evt.ts).toLocaleTimeString()}</span>
+                                  {evt.message}
+                                </div>
+                              </div>
+                            ))
+                          )}
                         </div>
                     </Card>
                 </div>
@@ -665,7 +682,7 @@ const App: React.FC = () => {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 
                 {/* Data Logging */}
-                <Card title="Data Logger">
+                <Card title="Data Logger" className="min-h-[220px]" bodyClassName="h-full">
                     <div className="flex items-center gap-4 mb-4">
                         <Button 
                             variant={isRecording ? 'danger' : 'success'} 
@@ -692,7 +709,7 @@ const App: React.FC = () => {
                 </Card>
 
                 {/* Command Center */}
-                <Card title="Command Center (UART)">
+                <Card title="Command Center (UART)" className="min-h-[220px]" bodyClassName="h-full">
                      <div className="flex gap-2 mb-4">
                          <div className="flex-1 relative">
                             <Terminal className="absolute left-3 top-2.5 text-gray-500" size={16} />

@@ -97,6 +97,9 @@ export class BluetoothService {
   private server: BluetoothRemoteGATTServer | null = null;
   private rxCharacteristic: BluetoothRemoteGATTCharacteristic | null = null;
   private onDisconnectCallback: (() => void) | null = null;
+  private async delay(ms: number) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
 
   async connect(config: BluetoothConfig, handleData: (data: string) => void): Promise<void> {
     if (!navigator.bluetooth) {
@@ -107,12 +110,15 @@ export class BluetoothService {
     // Note: To access a service, it must be in optionalServices or filters.
     const serviceUUID = config.serviceUUID.toLowerCase();
 
+    let step = 'requestDevice';
     try {
       if (config.mode === 'UART') {
-        // Many micro:bit firmwares do not advertise the UART service UUID,
-        // so use acceptAllDevices to ensure it appears in the chooser.
+        // Match micro:bit by name like the working legacy app.
         this.device = await navigator.bluetooth.requestDevice({
-          acceptAllDevices: true,
+          filters: [
+            { namePrefix: 'BBC micro:bit' },
+            { namePrefix: 'micro:bit' }
+          ],
           optionalServices: [serviceUUID]
         });
       } else {
@@ -126,14 +132,32 @@ export class BluetoothService {
       
       this.device.addEventListener('gattserverdisconnected', this.handleDisconnect.bind(this));
 
-      this.server = await this.device.gatt?.connect() || null;
+      step = 'gattConnect';
+      if (this.device.gatt?.connected) {
+        this.server = this.device.gatt;
+      } else {
+        try {
+          this.server = await this.device.gatt?.connect() || null;
+        } catch (e: any) {
+          if (e?.name === 'NotSupportedError') {
+            // Retry once after disconnecting (device may be in a stale state).
+            try { this.device.gatt?.disconnect(); } catch {}
+            await this.delay(300);
+            this.server = await this.device.gatt?.connect() || null;
+          } else {
+            throw e;
+          }
+        }
+      }
       if (!this.server) throw new Error('Could not connect to GATT Server');
 
       let service: BluetoothRemoteGATTService | null = null;
       try {
+        step = 'getPrimaryService';
         service = await this.server.getPrimaryService(serviceUUID);
       } catch (e: any) {
         if (e?.name === 'NotSupportedError' || e?.name === 'NotFoundError') {
+          step = 'getPrimaryServices';
           const services = await this.server.getPrimaryServices();
           service = services.find(s => s.uuid.toLowerCase() === serviceUUID) || null;
         } else {
@@ -146,13 +170,16 @@ export class BluetoothService {
         );
       }
 
+      step = 'getCharacteristics';
       const characteristics = await service.getCharacteristics();
       const txUuid = config.txUUID.toLowerCase();
       const rxUuid = config.rxUUID.toLowerCase();
-      const txChar = characteristics.find(c => c.uuid.toLowerCase() === txUuid) ||
-        characteristics.find(c => c.properties.notify || c.properties.indicate);
-      const rxChar = characteristics.find(c => c.uuid.toLowerCase() === rxUuid) ||
-        characteristics.find(c => c.properties.write || c.properties.writeWithoutResponse);
+      const txByUuid = characteristics.find(c => c.uuid.toLowerCase() === txUuid);
+      const rxByUuid = characteristics.find(c => c.uuid.toLowerCase() === rxUuid);
+      const notifyChar = characteristics.find(c => c.properties.notify || c.properties.indicate);
+      const writeChar = characteristics.find(c => c.properties.write || c.properties.writeWithoutResponse);
+      const txChar = txByUuid || notifyChar;
+      const rxChar = rxByUuid || writeChar;
 
       if (!txChar) {
         throw new Error('UART TX characteristic (notify) not found.');
@@ -161,21 +188,36 @@ export class BluetoothService {
         throw new Error('UART RX characteristic (write) not found.');
       }
 
-      await txChar.startNotifications();
-      txChar.addEventListener('characteristicvaluechanged', (e: any) => {
-        const value = new TextDecoder().decode(e.target.value);
-        handleData(value);
-      });
+      step = 'startNotifications';
+      const attachNotify = async (c: BluetoothRemoteGATTCharacteristic) => {
+        await c.startNotifications();
+        c.addEventListener('characteristicvaluechanged', (e: any) => {
+          const value = new TextDecoder().decode(e.target.value);
+          handleData(value);
+        });
+      };
+      try {
+        await attachNotify(txChar);
+      } catch (e: any) {
+        // Some firmwares swap UART TX/RX or do not allow notify on the expected UUID.
+        if ((e?.name === 'NotSupportedError' || e?.message?.includes('Not supported')) && rxChar) {
+          await attachNotify(rxChar);
+        } else {
+          throw e;
+        }
+      }
 
+      step = 'ready';
       this.rxCharacteristic = rxChar;
 
     } catch (error: any) {
       if (error.name === 'NotFoundError' || error.message.toLowerCase().includes('cancel')) {
         console.warn('Bluetooth Connection: User cancelled device chooser.');
       } else {
-        console.error('Bluetooth Connection Error:', error);
+        console.error(`Bluetooth Connection Error at ${step}:`, error);
       }
-      throw error;
+      const suffix = step ? ` (step: ${step})` : '';
+      throw new Error(`${error.message || 'Connection failed'}${suffix}`);
     }
   }
 

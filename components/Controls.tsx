@@ -17,10 +17,10 @@ export const Button: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { 
   );
 };
 
-export const Card: React.FC<{ children: React.ReactNode, title?: string, className?: string }> = ({ children, title, className = '' }) => (
-  <div className={`bg-dark-800 border border-gray-700 rounded-lg shadow-sm overflow-hidden ${className}`}>
+export const Card: React.FC<{ children: React.ReactNode, title?: string, className?: string, bodyClassName?: string, clip?: boolean }> = ({ children, title, className = '', bodyClassName = '', clip = true }) => (
+  <div className={`bg-dark-800 border border-gray-700 rounded-lg shadow-sm ${clip ? 'overflow-hidden' : 'overflow-visible'} ${className}`}>
     {title && <div className="px-4 py-3 border-b border-gray-700 bg-gray-800/50 font-semibold text-gray-200">{title}</div>}
-    <div className="p-4">{children}</div>
+    <div className={`p-4 ${bodyClassName}`}>{children}</div>
   </div>
 );
 
